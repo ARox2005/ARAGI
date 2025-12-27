@@ -7,6 +7,7 @@ import streamlit as st
 from typing import List, Optional, Tuple, Dict, Any
 import base64
 from pathlib import Path
+import time
 
 
 def init_session_state():
@@ -205,6 +206,38 @@ def render_sidebar(pipeline) -> Tuple[List[str], bool]:
         st.caption(f"Documents: {stats['total_sources']}")
         st.caption(f"Chunks: {stats['total_chunks']}")
         
+        st.divider()
+        
+        # Danger zone - Delete all
+        st.subheader("⚠️ Danger Zone")
+        
+        # Use session state for confirmation
+        if 'confirm_delete_all' not in st.session_state:
+            st.session_state.confirm_delete_all = False
+        
+        if not st.session_state.confirm_delete_all:
+            if st.button("🗑️ Delete All Documents", type="secondary", use_container_width=True):
+                st.session_state.confirm_delete_all = True
+                st.rerun()
+        else:
+            st.warning("⚠️ This will permanently delete ALL documents and indexes!")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Confirm", type="primary", use_container_width=True):
+                    with st.spinner("Deleting everything..."):
+                        result = pipeline.delete_all()
+                        if result['success']:
+                            st.success(f"Deleted {result['files_deleted']} files and {result['chunks_deleted']} chunks")
+                        else:
+                            st.error(f"Errors: {', '.join(result['errors'])}")
+                    st.session_state.confirm_delete_all = False
+                    st.session_state.messages = []  # Also clear chat
+                    st.rerun()
+            with col2:
+                if st.button("❌ Cancel", use_container_width=True):
+                    st.session_state.confirm_delete_all = False
+                    st.rerun()
+        
         # Clear chat button
         st.divider()
         if st.button("🗑️ Clear Chat History"):
@@ -317,6 +350,9 @@ def render_streaming_response(response_generator, placeholder):
         
         # Update placeholder with current response
         placeholder.markdown(full_response + "▌")
+        
+        # Small delay to ensure UI renders each token (creates streaming effect)
+        time.sleep(0.01)
         
         if chunk.get('done'):
             final_sources = chunk.get('sources', [])

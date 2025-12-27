@@ -158,9 +158,16 @@ class QwenVLM:
             messages.append({
                 "role": "system",
                 "content": (
-                    "You are a helpful AI assistant. Answer questions accurately based on "
-                    "the provided context. If the context doesn't contain enough information, "
-                    "say so. Always cite the source documents when using information from them."
+                    "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
+                    "STRICT RULES:\n"
+                    "1. You must ONLY use information from the provided context to answer questions.\n"
+                    "2. If the context does not contain relevant information to answer the question, "
+                    "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
+                    "Please upload relevant documents or ask a question related to the uploaded content.'\n"
+                    "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
+                    "4. Always cite the source documents when providing information from the context.\n"
+                    "5. If the question is partially answerable, only answer the parts that are covered by the context "
+                    "and clearly state what information is missing."
                 )
             })
         
@@ -176,12 +183,20 @@ class QwenVLM:
                     "image": pil_image
                 })
         
-        # Add context if present
+        # Add context if present - with strict enforcement
         text_content = ""
-        if context:
-            text_content += f"Context:\n{context}\n\n"
-        
-        text_content += f"Question: {query}"
+        if context and context.strip():
+            text_content += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
+            text_content += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+        else:
+            # No context available - explicitly tell model to refuse
+            text_content += (
+                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
+                f"Question: {query}\n\n"
+                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
+                "'I don't have information about this topic in my knowledge base. "
+                "Please upload relevant documents or ask a question related to the uploaded content.'"
+            )
         
         user_content.append({
             "type": "text",
@@ -320,11 +335,12 @@ class QwenVLM:
             inputs = self.tokenizer(text, return_tensors="pt")
             inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
         
-        # Create streamer
+        # Create streamer with timeout for real-time streaming
         streamer = TextIteratorStreamer(
             self.tokenizer,
             skip_prompt=True,
-            skip_special_tokens=True
+            skip_special_tokens=True,
+            timeout=10.0  # Timeout to yield tokens immediately
         )
         
         # Generation kwargs
@@ -415,17 +431,39 @@ class QwenTextModel:
     ) -> str:
         """Generate text response (images are ignored)."""
         
+        strict_prompt = (
+            "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
+            "STRICT RULES:\n"
+            "1. You must ONLY use information from the provided context to answer questions.\n"
+            "2. If the context does not contain relevant information to answer the question, "
+            "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
+            "Please upload relevant documents or ask a question related to the uploaded content.'\n"
+            "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
+            "4. Always cite the source documents when providing information from the context.\n"
+            "5. If the question is partially answerable, only answer the parts that are covered by the context "
+            "and clearly state what information is missing."
+        )
+        
         messages = [
             {
                 "role": "system",
-                "content": system_prompt or "You are a helpful assistant."
+                "content": system_prompt or strict_prompt
             }
         ]
         
         user_message = ""
-        if context:
-            user_message += f"Context:\n{context}\n\n"
-        user_message += f"Question: {query}"
+        if context and context.strip():
+            user_message += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
+            user_message += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+        else:
+            # No context available - explicitly tell model to refuse
+            user_message += (
+                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
+                f"Question: {query}\n\n"
+                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
+                "'I don't have information about this topic in my knowledge base. "
+                "Please upload relevant documents or ask a question related to the uploaded content.'"
+            )
         
         messages.append({"role": "user", "content": user_message})
         
@@ -453,6 +491,92 @@ class QwenTextModel:
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         
         return response.strip()
+    
+    def generate_stream(
+        self,
+        query: str,
+        context: Optional[str] = None,
+        images: Optional[List] = None,  # Ignored
+        system_prompt: Optional[str] = None,
+        max_new_tokens: int = 1024,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> Generator[str, None, None]:
+        """Generate text response with streaming output (images are ignored)."""
+        
+        strict_prompt = (
+            "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
+            "STRICT RULES:\n"
+            "1. You must ONLY use information from the provided context to answer questions.\n"
+            "2. If the context does not contain relevant information to answer the question, "
+            "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
+            "Please upload relevant documents or ask a question related to the uploaded content.'\n"
+            "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
+            "4. Always cite the source documents when providing information from the context.\n"
+            "5. If the question is partially answerable, only answer the parts that are covered by the context "
+            "and clearly state what information is missing."
+        )
+        
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt or strict_prompt
+            }
+        ]
+        
+        user_message = ""
+        if context and context.strip():
+            user_message += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
+            user_message += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+        else:
+            # No context available - explicitly tell model to refuse
+            user_message += (
+                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
+                f"Question: {query}\n\n"
+                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
+                "'I don't have information about this topic in my knowledge base. "
+                "Please upload relevant documents or ask a question related to the uploaded content.'"
+            )
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        
+        inputs = self.tokenizer(text, return_tensors="pt")
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        
+        # Create streamer
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+            timeout=10.0
+        )
+        
+        # Generation kwargs
+        generation_kwargs = {
+            **inputs,
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "do_sample": True,
+            "streamer": streamer,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        
+        # Run generation in thread
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread.start()
+        
+        # Yield tokens
+        for token in streamer:
+            yield token
+        
+        thread.join()
     
     def is_vision_available(self) -> bool:
         return False

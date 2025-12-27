@@ -160,7 +160,11 @@ class FAISSVectorStore:
         
         # Normalize filter sources for comparison (handle both absolute and relative paths)
         normalized_filter = None
-        if filter_sources:
+        if filter_sources is not None:
+            # If filter_sources is an empty list, no documents should match
+            if len(filter_sources) == 0:
+                return []  # No documents selected, return empty results
+            
             normalized_filter = set()
             for src in filter_sources:
                 # Add both the original and normalized versions for matching
@@ -177,6 +181,11 @@ class FAISSVectorStore:
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1:  # No more results
                 break
+            
+            # Bounds check to handle corrupted/out-of-sync index
+            if idx < 0 or idx >= len(self.documents):
+                print(f"[VectorStore WARNING] Invalid index {idx}, skipping (documents length: {len(self.documents)})")
+                continue
             
             doc = self.documents[idx]
             

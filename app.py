@@ -96,7 +96,8 @@ def main():
     # Chat input area at the bottom
     st.divider()
     
-    # Query file upload (collapsible)
+    # Query file upload (collapsible) - initialize outside expander for proper scoping
+    query_files = []
     with st.expander("📎 Attach files to your query", expanded=False):
         query_files = render_query_file_upload()
         if query_files:
@@ -106,11 +107,13 @@ def main():
     user_query = st.chat_input("Ask a question about your documents...")
     
     if user_query:
-        # Get image data for display
-        query_image_data = [
-            data for data, name in query_files
-            if name.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ] if query_files else []
+        # Get image data for display - safely handle empty or None query_files
+        query_image_data = []
+        if query_files:
+            query_image_data = [
+                data for data, name in query_files
+                if name.lower().endswith(('.png', '.jpg', '.jpeg'))
+            ]
         
         # Add user message to history
         add_user_message(user_query, images=query_image_data)
@@ -125,9 +128,10 @@ def main():
             st.markdown(user_query)
         
         # Determine which sources to use
-        if use_all or not selected_sources:
-            filter_sources = None  # Use all
+        if use_all:
+            filter_sources = None  # Use all documents
         else:
+            # Use only selected documents (can be empty list if none selected)
             filter_sources = selected_sources
         
         # Generate response
@@ -146,7 +150,7 @@ def main():
                         response_gen = pipeline.query(
                             user_query=user_query,
                             filter_sources=filter_sources,
-                            query_files=query_files,
+                            query_files=query_files if query_files else None,
                             query_images=query_images,
                             stream=True
                         )
@@ -156,7 +160,7 @@ def main():
                         result = pipeline.query(
                             user_query=user_query,
                             filter_sources=filter_sources,
-                            query_files=query_files,
+                            query_files=query_files if query_files else None,
                             query_images=query_images,
                             stream=False
                         )

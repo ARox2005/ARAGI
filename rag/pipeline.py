@@ -197,7 +197,8 @@ class RAGPipeline:
         self,
         query: str,
         filter_sources: Optional[List[str]] = None,
-        top_k: Optional[int] = None
+        top_k: Optional[int] = None,
+        min_score: float = 0.3  # Minimum similarity score threshold
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant document chunks for a query.
@@ -206,6 +207,7 @@ class RAGPipeline:
             query: Search query
             filter_sources: Optional list of source files to filter
             top_k: Number of results (uses default if None)
+            min_score: Minimum similarity score threshold (0-1). Documents below this are filtered out.
             
         Returns:
             List of retrieved document chunks with scores
@@ -223,9 +225,14 @@ class RAGPipeline:
             filter_sources=filter_sources
         )
         
-        # Format results
+        # Format results and filter by minimum score
         retrieved = []
         for doc, score in results:
+            # Filter out low-relevance documents
+            if score < min_score:
+                print(f"[RAG DEBUG] Filtered out low-score document: {doc.get('filename', 'unknown')} (score: {score:.3f} < {min_score})")
+                continue
+                
             retrieved.append({
                 'text': doc.get('text', ''),
                 'source': doc.get('source', ''),
@@ -443,3 +450,63 @@ class RAGPipeline:
             'llm_loaded': self._llm_loaded,
             'vision_available': self._llm.is_vision_available() if self._llm_loaded else None
         }
+    
+    def delete_all(self) -> Dict[str, Any]:
+        """
+        Delete ALL documents from knowledge base and vector store.
+        This includes:
+        - Clearing the vector store index
+        - Deleting all files in the knowledge base folder
+        - Removing the saved vector store files
+        
+        Returns:
+            Dictionary with deletion results
+        """
+        import shutil
+        
+        results = {
+            'files_deleted': 0,
+            'chunks_deleted': 0,
+            'success': True,
+            'errors': []
+        }
+        
+        try:
+            # Count chunks before clearing
+            results['chunks_deleted'] = self.vector_store.count()
+            
+            # Clear the vector store in memory
+            self.vector_store.clear()
+            
+            # Delete all files in knowledge base folder
+            if os.path.exists(self.knowledge_base_dir):
+                for filename in os.listdir(self.knowledge_base_dir):
+                    file_path = os.path.join(self.knowledge_base_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                            results['files_deleted'] += 1
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                            results['files_deleted'] += 1
+                    except Exception as e:
+                        results['errors'].append(f"Failed to delete {filename}: {str(e)}")
+            
+            # Delete vector store files on disk
+            if os.path.exists(self.vector_store_dir):
+                for filename in os.listdir(self.vector_store_dir):
+                    file_path = os.path.join(self.vector_store_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
+                    except Exception as e:
+                        results['errors'].append(f"Failed to delete vector file {filename}: {str(e)}")
+            
+            # Save empty vector store
+            self.vector_store.save(self.vector_store_dir)
+            
+        except Exception as e:
+            results['success'] = False
+            results['errors'].append(str(e))
+        
+        return results
