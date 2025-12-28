@@ -44,13 +44,38 @@ st.set_page_config(
 create_chat_css()
 
 
+def get_data_directory():
+    """
+    Get the appropriate data directory based on environment.
+    On Streamlit Cloud, use /tmp since the app directory is read-only.
+    """
+    import platform
+    
+    # Check if running on Streamlit Cloud (Linux with limited write access)
+    # or check for common cloud environment indicators
+    is_cloud = (
+        platform.system() == "Linux" and 
+        os.environ.get("STREAMLIT_SHARING_MODE") or
+        os.path.exists("/mount/src")  # Streamlit Cloud mounts source here
+    )
+    
+    if is_cloud:
+        # Use /tmp on Streamlit Cloud (writable)
+        data_dir = "/tmp/rag_data"
+    else:
+        # Use local data directory for development
+        data_dir = os.path.join(PROJECT_ROOT, "data")
+    
+    return data_dir
+
+
 @st.cache_resource
 def get_pipeline():
     """
     Initialize and cache the RAG pipeline.
     Using st.cache_resource ensures the pipeline is only created once.
     """
-    data_dir = os.path.join(PROJECT_ROOT, "data")
+    data_dir = get_data_directory()
     return RAGPipeline(
         data_dir=data_dir,
         embedding_model_name="all-MiniLM-L6-v2",
