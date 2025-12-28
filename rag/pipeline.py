@@ -11,7 +11,7 @@ from ingestion.loaders import DocumentLoader
 from ingestion.ocr import OCRProcessor
 from ingestion.chunking import TextChunker
 from embeddings.embedder import EmbeddingModel
-from vectorstore.store import FAISSVectorStore
+from vectorstore.store import ChromaVectorStore
 from models.qwen_vlm import QwenVLM, load_qwen_model
 from utils.file_utils import (
     is_image_file, is_pdf_file, is_docx_file, is_text_file,
@@ -68,15 +68,12 @@ class RAGPipeline:
             device=device
         )
         
-        # Vector store
-        if FAISSVectorStore.exists(self.vector_store_dir):
-            print("Loading existing vector store...")
-            self.vector_store = FAISSVectorStore.load(self.vector_store_dir)
-        else:
-            print("Creating new vector store...")
-            self.vector_store = FAISSVectorStore(
-                embedding_dim=self.embedding_model.get_dimension()
-            )
+        # Vector store (ChromaDB with persistent storage)
+        print("Initializing ChromaDB vector store...")
+        self.vector_store = ChromaVectorStore(
+            embedding_dim=self.embedding_model.get_dimension(),
+            persist_directory=self.vector_store_dir
+        )
         
         # Language model (lazy loading)
         self._llm = None

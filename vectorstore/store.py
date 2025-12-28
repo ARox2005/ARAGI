@@ -1,62 +1,56 @@
 """
-Vector store module using FAISS for efficient similarity search.
-Provides document storage, retrieval, and persistence.
+Vector store module using ChromaDB for persistent similarity search.
+Provides document storage, retrieval, and automatic persistence.
 """
 
 import os
-import pickle
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
+import uuid
 
-import faiss
+import chromadb
+from chromadb.config import Settings
 
 
-class FAISSVectorStore:
+class ChromaVectorStore:
     """
-    FAISS-based vector store for document embeddings.
-    Supports adding, removing, searching, and persisting documents.
+    ChromaDB-based vector store for document embeddings.
+    Supports adding, removing, searching, with automatic persistence.
     """
     
-    def __init__(self, embedding_dim: int, index_type: str = 'flat'):
+    def __init__(
+        self, 
+        embedding_dim: int = 384,  # Default for all-MiniLM-L6-v2
+        persist_directory: Optional[str] = None,
+        collection_name: str = "rag_documents"
+    ):
         """
         Initialize the vector store.
         
         Args:
-            embedding_dim: Dimension of embedding vectors
-            index_type: Type of FAISS index ('flat' for exact search, 'ivf' for approximate)
+            embedding_dim: Dimension of embedding vectors (stored for compatibility)
+            persist_directory: Directory for persistent storage
+            collection_name: Name of the ChromaDB collection
         """
         self.embedding_dim = embedding_dim
-        self.index_type = index_type
+        self.persist_directory = persist_directory
+        self.collection_name = collection_name
         
-        # Create FAISS index
-        if index_type == 'flat':
-            # Exact search using L2 distance (converted to cosine via normalization)
-            self.index = faiss.IndexFlatIP(embedding_dim)  # Inner product for cosine similarity
+        # Create ChromaDB client with persistent storage
+        if persist_directory:
+            self.client = chromadb.PersistentClient(path=persist_directory)
         else:
-            # For larger datasets, could use IVF index
-            self.index = faiss.IndexFlatIP(embedding_dim)
+            self.client = chromadb.Client()
         
-        # Store document metadata
-        self.documents: List[Dict[str, Any]] = []
-        
-        # Map from document ID to index position
-        self.id_to_position: Dict[str, int] = {}
-        
-        # Counter for generating unique IDs
-        self._id_counter = 0
+        # Get or create collection with cosine similarity
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
     
     def _generate_id(self) -> str:
         """Generate unique document ID."""
-        doc_id = f"doc_{self._id_counter}"
-        self._id_counter += 1
-        return doc_id
-    
-    def _normalize_embedding(self, embedding: np.ndarray) -> np.ndarray:
-        """Normalize embedding for cosine similarity."""
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            return embedding / norm
-        return embedding
+        return str(uuid.uuid4())
     
     def add(self, embedding: np.ndarray, metadata: Dict[str, Any]) -> str:
         """
@@ -71,20 +65,23 @@ class FAISSVectorStore:
         """
         doc_id = self._generate_id()
         
-        # Normalize and prepare embedding
-        normalized = self._normalize_embedding(embedding).astype('float32')
-        normalized = normalized.reshape(1, -1)
+        # Extract text from metadata (ChromaDB stores documents separately)
+        text = metadata.get('text', '')
         
-        # Add to FAISS index
-        self.index.add(normalized)
+        # Prepare metadata for ChromaDB (must be flat dict with str/int/float/bool values)
+        chroma_metadata = {
+            'source': str(metadata.get('source', '')),
+            'filename': str(metadata.get('filename', '')),
+            'chunk_index': int(metadata.get('chunk_index', 0)),
+        }
         
-        # Store metadata
-        position = len(self.documents)
-        self.documents.append({
-            'id': doc_id,
-            **metadata
-        })
-        self.id_to_position[doc_id] = position
+        # Add to collection
+        self.collection.add(
+            ids=[doc_id],
+            embeddings=[embedding.tolist()],
+            documents=[text],
+            metadatas=[chroma_metadata]
+        )
         
         return doc_id
     
@@ -106,27 +103,26 @@ class FAISSVectorStore:
         if len(embeddings) != len(metadatas):
             raise ValueError("Number of embeddings must match number of metadata dicts")
         
-        doc_ids = []
+        doc_ids = [self._generate_id() for _ in range(len(metadatas))]
         
-        # Normalize all embeddings
-        normalized = np.array([
-            self._normalize_embedding(emb) for emb in embeddings
-        ]).astype('float32')
+        # Extract texts and prepare metadata
+        texts = [m.get('text', '') for m in metadatas]
+        chroma_metadatas = [
+            {
+                'source': str(m.get('source', '')),
+                'filename': str(m.get('filename', '')),
+                'chunk_index': int(m.get('chunk_index', 0)),
+            }
+            for m in metadatas
+        ]
         
-        # Add to FAISS index
-        self.index.add(normalized)
-        
-        # Store metadata
-        for metadata in metadatas:
-            doc_id = self._generate_id()
-            position = len(self.documents)
-            
-            self.documents.append({
-                'id': doc_id,
-                **metadata
-            })
-            self.id_to_position[doc_id] = position
-            doc_ids.append(doc_id)
+        # Add to collection
+        self.collection.add(
+            ids=doc_ids,
+            embeddings=embeddings.tolist(),
+            documents=texts,
+            metadatas=chroma_metadatas
+        )
         
         return doc_ids
     
@@ -147,104 +143,138 @@ class FAISSVectorStore:
         Returns:
             List of (document_metadata, similarity_score) tuples
         """
-        if self.index.ntotal == 0:
+        if self.collection.count() == 0:
             return []
         
-        # Normalize query embedding
-        query = self._normalize_embedding(query_embedding).astype('float32')
-        query = query.reshape(1, -1)
+        # Handle empty filter list - no documents should match
+        if filter_sources is not None and len(filter_sources) == 0:
+            return []
         
-        # Search (get more results if filtering)
-        search_k = top_k * 3 if filter_sources else top_k
-        search_k = min(search_k, self.index.ntotal)
-        
-        # Normalize filter sources for comparison (handle both absolute and relative paths)
-        normalized_filter = None
-        if filter_sources is not None:
-            # If filter_sources is an empty list, no documents should match
-            if len(filter_sources) == 0:
-                return []  # No documents selected, return empty results
-            
-            normalized_filter = set()
+        # Build where filter for sources
+        where_filter = None
+        if filter_sources is not None and len(filter_sources) > 0:
+            # ChromaDB uses $in operator for multiple values
+            # Normalize paths for matching
+            normalized_sources = []
             for src in filter_sources:
-                # Add both the original and normalized versions for matching
-                normalized_filter.add(src)
-                normalized_filter.add(os.path.normpath(src))
-                normalized_filter.add(os.path.abspath(src))
-                # Also add just the filename for fallback matching
-                normalized_filter.add(os.path.basename(src))
+                normalized_sources.append(src)
+                normalized_sources.append(os.path.normpath(src))
+                normalized_sources.append(os.path.abspath(src))
+                normalized_sources.append(os.path.basename(src))
+            
+            # Remove duplicates
+            normalized_sources = list(set(normalized_sources))
+            
+            where_filter = {
+                "$or": [
+                    {"source": {"$in": normalized_sources}},
+                    {"filename": {"$in": normalized_sources}}
+                ]
+            }
         
-        # Perform search
-        scores, indices = self.index.search(query, search_k)
+        # Adjust top_k to not exceed collection size
+        actual_top_k = min(top_k, self.collection.count())
         
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx == -1:  # No more results
-                break
-            
-            # Bounds check to handle corrupted/out-of-sync index
-            if idx < 0 or idx >= len(self.documents):
-                print(f"[VectorStore WARNING] Invalid index {idx}, skipping (documents length: {len(self.documents)})")
-                continue
-            
-            doc = self.documents[idx]
-            
-            # Apply source filter if specified
-            if normalized_filter:
-                doc_source = doc.get('source', '')
-                doc_filename = doc.get('filename', '')
-                # Check if document matches any of the filter criteria
-                match = (
-                    doc_source in normalized_filter or
-                    os.path.normpath(doc_source) in normalized_filter or
-                    os.path.abspath(doc_source) in normalized_filter or
-                    doc_filename in normalized_filter
-                )
-                if not match:
-                    continue
-            
-            results.append((doc, float(score)))
-            
-            if len(results) >= top_k:
-                break
+        # Query the collection
+        results = self.collection.query(
+            query_embeddings=[query_embedding.tolist()],
+            n_results=actual_top_k,
+            where=where_filter,
+            include=["documents", "metadatas", "distances"]
+        )
         
-        return results
+        # Format results
+        formatted_results = []
+        if results and results['ids'] and len(results['ids']) > 0:
+            for i, doc_id in enumerate(results['ids'][0]):
+                # ChromaDB returns distances (lower is better for cosine)
+                # Convert to similarity score (higher is better)
+                distance = results['distances'][0][i] if results['distances'] else 0
+                # For cosine distance: similarity = 1 - distance
+                similarity = 1 - distance
+                
+                doc = {
+                    'id': doc_id,
+                    'text': results['documents'][0][i] if results['documents'] else '',
+                    'source': results['metadatas'][0][i].get('source', '') if results['metadatas'] else '',
+                    'filename': results['metadatas'][0][i].get('filename', '') if results['metadatas'] else '',
+                    'chunk_index': results['metadatas'][0][i].get('chunk_index', 0) if results['metadatas'] else 0,
+                }
+                
+                formatted_results.append((doc, similarity))
+        
+        return formatted_results
     
     def get_by_id(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Get document by ID."""
-        position = self.id_to_position.get(doc_id)
-        if position is not None:
-            return self.documents[position]
+        try:
+            result = self.collection.get(
+                ids=[doc_id],
+                include=["documents", "metadatas"]
+            )
+            if result and result['ids']:
+                metadata = result['metadatas'][0] if result['metadatas'] else {}
+                return {
+                    'id': result['ids'][0],
+                    'text': result['documents'][0] if result['documents'] else '',
+                    **metadata
+                }
+        except Exception:
+            pass
         return None
     
     def get_all_sources(self) -> List[str]:
         """Get list of all unique source files in the store."""
+        if self.collection.count() == 0:
+            return []
+        
+        # Get all documents metadata
+        results = self.collection.get(include=["metadatas"])
+        
         sources = set()
-        for doc in self.documents:
-            source = doc.get('source', '')
-            if source:
-                sources.add(source)
+        if results and results['metadatas']:
+            for metadata in results['metadatas']:
+                source = metadata.get('source', '')
+                if source:
+                    sources.add(source)
+        
         return sorted(list(sources))
     
     def get_documents_by_source(self, source: str) -> List[Dict[str, Any]]:
         """Get all documents from a specific source."""
-        return [doc for doc in self.documents if doc.get('source') == source]
+        results = self.collection.get(
+            where={"source": source},
+            include=["documents", "metadatas"]
+        )
+        
+        documents = []
+        if results and results['ids']:
+            for i, doc_id in enumerate(results['ids']):
+                metadata = results['metadatas'][i] if results['metadatas'] else {}
+                documents.append({
+                    'id': doc_id,
+                    'text': results['documents'][i] if results['documents'] else '',
+                    **metadata
+                })
+        
+        return documents
     
     def count(self) -> int:
         """Return number of documents in store."""
-        return len(self.documents)
+        return self.collection.count()
     
     def clear(self) -> None:
         """Clear all documents from the store."""
-        self.index.reset()
-        self.documents = []
-        self.id_to_position = {}
-        self._id_counter = 0
+        # Delete the collection and recreate it
+        self.client.delete_collection(name=self.collection_name)
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
     
     def remove_by_source(self, source: str) -> int:
         """
         Remove all documents from a specific source.
-        Note: This rebuilds the entire index.
         
         Args:
             source: Source file path to remove
@@ -252,55 +282,29 @@ class FAISSVectorStore:
         Returns:
             Number of documents removed
         """
-        # Find documents to keep
-        docs_to_keep = [
-            doc for doc in self.documents
-            if doc.get('source') != source
-        ]
+        # Get count before deletion
+        docs_before = self.collection.get(where={"source": source})
+        count_before = len(docs_before['ids']) if docs_before and docs_before['ids'] else 0
         
-        removed_count = len(self.documents) - len(docs_to_keep)
+        if count_before > 0:
+            # Delete by source
+            self.collection.delete(where={"source": source})
         
-        if removed_count == 0:
-            return 0
-        
-        # We need to rebuild the index
-        # First, get embeddings for docs to keep (we need to re-embed or store embeddings)
-        # For simplicity, we'll just rebuild with stored metadata
-        # In production, you'd want to store embeddings too
-        
-        self.documents = docs_to_keep
-        self.id_to_position = {
-            doc['id']: i for i, doc in enumerate(self.documents)
-        }
-        
-        return removed_count
+        return count_before
     
     def save(self, directory: str) -> None:
         """
         Save the vector store to disk.
+        Note: ChromaDB with PersistentClient auto-saves, so this is a no-op.
         
         Args:
-            directory: Directory to save to
+            directory: Directory to save to (ignored, uses persist_directory)
         """
-        os.makedirs(directory, exist_ok=True)
-        
-        # Save FAISS index
-        index_path = os.path.join(directory, 'faiss.index')
-        faiss.write_index(self.index, index_path)
-        
-        # Save metadata
-        metadata_path = os.path.join(directory, 'metadata.pkl')
-        with open(metadata_path, 'wb') as f:
-            pickle.dump({
-                'documents': self.documents,
-                'id_to_position': self.id_to_position,
-                '_id_counter': self._id_counter,
-                'embedding_dim': self.embedding_dim,
-                'index_type': self.index_type
-            }, f)
+        # ChromaDB PersistentClient automatically persists
+        pass
     
     @classmethod
-    def load(cls, directory: str) -> 'FAISSVectorStore':
+    def load(cls, directory: str) -> 'ChromaVectorStore':
         """
         Load a vector store from disk.
         
@@ -308,33 +312,18 @@ class FAISSVectorStore:
             directory: Directory to load from
             
         Returns:
-            Loaded FAISSVectorStore instance
+            Loaded ChromaVectorStore instance
         """
-        # Load metadata
-        metadata_path = os.path.join(directory, 'metadata.pkl')
-        with open(metadata_path, 'rb') as f:
-            data = pickle.load(f)
-        
-        # Create instance
-        store = cls(
-            embedding_dim=data['embedding_dim'],
-            index_type=data['index_type']
-        )
-        
-        # Load FAISS index
-        index_path = os.path.join(directory, 'faiss.index')
-        store.index = faiss.read_index(index_path)
-        
-        # Restore metadata
-        store.documents = data['documents']
-        store.id_to_position = data['id_to_position']
-        store._id_counter = data['_id_counter']
-        
-        return store
+        # Create instance with the persist directory
+        return cls(persist_directory=directory)
     
     @classmethod
     def exists(cls, directory: str) -> bool:
         """Check if a saved vector store exists at the given directory."""
-        index_path = os.path.join(directory, 'faiss.index')
-        metadata_path = os.path.join(directory, 'metadata.pkl')
-        return os.path.exists(index_path) and os.path.exists(metadata_path)
+        # Check if the chroma.sqlite3 file exists (ChromaDB's main storage file)
+        chroma_db_path = os.path.join(directory, "chroma.sqlite3")
+        return os.path.exists(chroma_db_path)
+
+
+# Alias for backward compatibility
+FAISSVectorStore = ChromaVectorStore

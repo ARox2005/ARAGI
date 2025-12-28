@@ -6,7 +6,7 @@ accelerate>=0.25.0
 
 # Embeddings and vector store
 sentence-transformers>=2.2.2
-faiss-cpu>=1.7.4
+chromadb>=0.4.0
 
 # Document processing
 PyMuPDF>=1.23.0
