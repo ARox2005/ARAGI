@@ -295,7 +295,7 @@ def display_query_images(query_files: List[Tuple[bytes, str]]):
 
 
 def create_chat_css():
-    """Inject custom CSS for chat styling."""
+    """Inject custom CSS for chat styling that works in both light and dark modes."""
     st.markdown("""
     <style>
     /* Chat container styling */
@@ -310,22 +310,14 @@ def create_chat_css():
         padding: 0.5rem 1rem;
     }
     
-    /* Sidebar styling */
-    .stSidebar {
-        background-color: #f8f9fa;
-    }
-    
     /* File uploader compactness */
     .stFileUploader {
         padding: 0.5rem 0;
     }
     
-    /* Stats section */
-    .stats-container {
-        background-color: #e9ecef;
-        padding: 0.5rem;
-        border-radius: 0.25rem;
-    }
+    /* Remove hardcoded background colors - let Streamlit theme handle it */
+    /* This ensures proper appearance in both light and dark modes */
+    
     </style>
     """, unsafe_allow_html=True)
 
