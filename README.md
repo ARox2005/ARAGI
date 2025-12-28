@@ -11,10 +11,14 @@ A complete Retrieval-Augmented Generation (RAG) application using Python, Stream
 - **Knowledge Base Management**: Upload PDF, DOCX, TXT, and image files
 - **Multimodal RAG**: Query with text and images
 - **Document Selection**: Choose specific documents or use all
+- **Strict Knowledge Base Mode**: Model only answers from uploaded documents
 - **Chat Interface**: ChatGPT-style conversation with history
 - **Source Citations**: Track which documents informed each answer
 - **Streaming Responses**: Real-time token streaming
+- **Delete All Feature**: Clear entire knowledge base with one click
+- **ChromaDB Vector Store**: Persistent, production-ready vector storage
 - **GPU/CPU Fallback**: Automatic hardware detection
+- **Cloud Deployment Ready**: Works on Streamlit Cloud
 
 ## Prerequisites
 
@@ -139,7 +143,7 @@ rag_qwen_app/
 │   └── embedder.py        # Sentence transformer embeddings
 ├── vectorstore/
 │   ├── __init__.py
-│   └── store.py           # FAISS vector store
+│   └── store.py           # ChromaDB vector store
 ├── rag/
 │   ├── __init__.py
 │   └── pipeline.py        # RAG orchestration
@@ -151,7 +155,7 @@ rag_qwen_app/
 │   └── file_utils.py      # File utilities
 ├── data/
 │   ├── knowledge_base/    # Uploaded documents
-│   └── vector_store/      # FAISS index
+│   └── vector_store/      # ChromaDB index
 ├── requirements.txt
 └── README.md
 ```
@@ -186,6 +190,20 @@ RAGPipeline(
 ### Slow first query
 - Normal: Model is loading on first query
 - Subsequent queries will be faster
+
+## Deployment
+
+### Streamlit Cloud
+1. Push code to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io)
+3. Connect your repo and deploy
+
+**Note:** Data in cloud deployment is ephemeral (cleared on restart).
+
+### Other Platforms
+- **Hugging Face Spaces**: Best for GPU support
+- **Railway/Render**: Good for persistent storage
+- **Vercel**: Not supported (serverless limitations)
 
 ## License
 
