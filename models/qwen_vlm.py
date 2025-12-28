@@ -158,16 +158,17 @@ class QwenVLM:
             messages.append({
                 "role": "system",
                 "content": (
-                    "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
-                    "STRICT RULES:\n"
-                    "1. You must ONLY use information from the provided context to answer questions.\n"
-                    "2. If the context does not contain relevant information to answer the question, "
-                    "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
-                    "Please upload relevant documents or ask a question related to the uploaded content.'\n"
-                    "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
-                    "4. Always cite the source documents when providing information from the context.\n"
-                    "5. If the question is partially answerable, only answer the parts that are covered by the context "
-                    "and clearly state what information is missing."
+                    "You are a helpful RAG (Retrieval-Augmented Generation) assistant. "
+                    "Your role is to answer questions using the provided knowledge base context.\n\n"
+                    "RULES:\n"
+                    "1. When context is provided, USE IT to answer the question. This includes:\n"
+                    "   - Specific questions about content\n"
+                    "   - Requests to summarize, explain, or describe 'the document' or 'the content'\n"
+                    "   - Any question that can be answered from the provided context\n"
+                    "2. For GREETINGS (hello, hi, who are you, etc.): Respond naturally and introduce yourself.\n"
+                    "3. If the context doesn't contain relevant information, politely say so.\n"
+                    "4. Always cite source documents when using information from context.\n"
+                    "5. Be helpful, friendly, and thorough in your responses."
                 )
             })
         
@@ -183,19 +184,18 @@ class QwenVLM:
                     "image": pil_image
                 })
         
-        # Add context if present - with strict enforcement
+        # Add context if present
         text_content = ""
         if context and context.strip():
-            text_content += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
-            text_content += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+            text_content += f"DOCUMENT CONTENT FROM KNOWLEDGE BASE:\n{context}\n\n"
+            text_content += f"User Question: {query}\n\nAnswer based on the document content above. If asked to summarize or explain 'the document', use the content provided."
         else:
-            # No context available - explicitly tell model to refuse
+            # No context available - but still allow greetings
             text_content += (
-                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
                 f"Question: {query}\n\n"
-                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
-                "'I don't have information about this topic in my knowledge base. "
-                "Please upload relevant documents or ask a question related to the uploaded content.'"
+                "Note: No documents were found in the knowledge base for this query. "
+                "If this is a greeting or basic question, respond naturally. "
+                "If they're asking for specific information, let them know you don't have relevant documents uploaded."
             )
         
         user_content.append({
@@ -431,38 +431,38 @@ class QwenTextModel:
     ) -> str:
         """Generate text response (images are ignored)."""
         
-        strict_prompt = (
-            "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
-            "STRICT RULES:\n"
-            "1. You must ONLY use information from the provided context to answer questions.\n"
-            "2. If the context does not contain relevant information to answer the question, "
-            "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
-            "Please upload relevant documents or ask a question related to the uploaded content.'\n"
-            "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
-            "4. Always cite the source documents when providing information from the context.\n"
-            "5. If the question is partially answerable, only answer the parts that are covered by the context "
-            "and clearly state what information is missing."
+        rag_prompt = (
+            "You are a helpful RAG (Retrieval-Augmented Generation) assistant. "
+            "Your role is to answer questions using the provided knowledge base context.\n\n"
+            "RULES:\n"
+            "1. When context is provided, USE IT to answer the question. This includes:\n"
+            "   - Specific questions about content\n"
+            "   - Requests to summarize, explain, or describe 'the document' or 'the content'\n"
+            "   - Any question that can be answered from the provided context\n"
+            "2. For GREETINGS (hello, hi, who are you, etc.): Respond naturally and introduce yourself.\n"
+            "3. If the context doesn't contain relevant information, politely say so.\n"
+            "4. Always cite source documents when using information from context.\n"
+            "5. Be helpful, friendly, and thorough in your responses."
         )
         
         messages = [
             {
                 "role": "system",
-                "content": system_prompt or strict_prompt
+                "content": system_prompt or rag_prompt
             }
         ]
         
         user_message = ""
         if context and context.strip():
-            user_message += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
-            user_message += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+            user_message += f"DOCUMENT CONTENT FROM KNOWLEDGE BASE:\n{context}\n\n"
+            user_message += f"User Question: {query}\n\nAnswer based on the document content above. If asked to summarize or explain 'the document', use the content provided."
         else:
-            # No context available - explicitly tell model to refuse
+            # No context available - but still allow greetings
             user_message += (
-                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
                 f"Question: {query}\n\n"
-                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
-                "'I don't have information about this topic in my knowledge base. "
-                "Please upload relevant documents or ask a question related to the uploaded content.'"
+                "Note: No documents were found in the knowledge base for this query. "
+                "If this is a greeting or basic question, respond naturally. "
+                "If they're asking for specific information, let them know you don't have relevant documents uploaded."
             )
         
         messages.append({"role": "user", "content": user_message})
@@ -504,38 +504,38 @@ class QwenTextModel:
     ) -> Generator[str, None, None]:
         """Generate text response with streaming output (images are ignored)."""
         
-        strict_prompt = (
-            "You are a helpful AI assistant that ONLY answers questions based on the provided context. "
-            "STRICT RULES:\n"
-            "1. You must ONLY use information from the provided context to answer questions.\n"
-            "2. If the context does not contain relevant information to answer the question, "
-            "you MUST respond with: 'I don't have information about this topic in my knowledge base. "
-            "Please upload relevant documents or ask a question related to the uploaded content.'\n"
-            "3. Do NOT use any external knowledge, general knowledge, or make assumptions beyond the context.\n"
-            "4. Always cite the source documents when providing information from the context.\n"
-            "5. If the question is partially answerable, only answer the parts that are covered by the context "
-            "and clearly state what information is missing."
+        rag_prompt = (
+            "You are a helpful RAG (Retrieval-Augmented Generation) assistant. "
+            "Your role is to answer questions using the provided knowledge base context.\n\n"
+            "RULES:\n"
+            "1. When context is provided, USE IT to answer the question. This includes:\n"
+            "   - Specific questions about content\n"
+            "   - Requests to summarize, explain, or describe 'the document' or 'the content'\n"
+            "   - Any question that can be answered from the provided context\n"
+            "2. For GREETINGS (hello, hi, who are you, etc.): Respond naturally and introduce yourself.\n"
+            "3. If the context doesn't contain relevant information, politely say so.\n"
+            "4. Always cite source documents when using information from context.\n"
+            "5. Be helpful, friendly, and thorough in your responses."
         )
         
         messages = [
             {
                 "role": "system",
-                "content": system_prompt or strict_prompt
+                "content": system_prompt or rag_prompt
             }
         ]
         
         user_message = ""
         if context and context.strip():
-            user_message += f"KNOWLEDGE BASE CONTEXT (Use ONLY this information to answer):\n{context}\n\n"
-            user_message += f"Question: {query}\n\nRemember: Answer ONLY using the above context. If the context doesn't contain the answer, say you don't have that information."
+            user_message += f"DOCUMENT CONTENT FROM KNOWLEDGE BASE:\n{context}\n\n"
+            user_message += f"User Question: {query}\n\nAnswer based on the document content above. If asked to summarize or explain 'the document', use the content provided."
         else:
-            # No context available - explicitly tell model to refuse
+            # No context available - but still allow greetings
             user_message += (
-                "IMPORTANT: No relevant information was found in the knowledge base for this query.\n\n"
                 f"Question: {query}\n\n"
-                "Since there is NO CONTEXT from the knowledge base, you MUST respond with: "
-                "'I don't have information about this topic in my knowledge base. "
-                "Please upload relevant documents or ask a question related to the uploaded content.'"
+                "Note: No documents were found in the knowledge base for this query. "
+                "If this is a greeting or basic question, respond naturally. "
+                "If they're asking for specific information, let them know you don't have relevant documents uploaded."
             )
         
         messages.append({"role": "user", "content": user_message})
